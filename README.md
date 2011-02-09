@@ -2,19 +2,17 @@
 
 This project lives here: <http://github.com/trentm/ircgrep>
 
+
 ## Installation
 
-To install in your Python's global site-packages use one of the following:
+Clone the repo and add the "bin" dir to your PATH:
 
-    pip install ircgrep
-    pypm install ircgrep   # if you use ActivePython (http://www.activestate.com/activepython)
+    git clone git@github.com:trentm/ircgrep.git
+    export PATH=`pwd`/ircgrep/bin
 
+Alternatively your could add an alias to your ".bashrc" or equivalent:
 
-## Known channel logs
-
-To grep logs for a channel, ircgrep has to know about a log location for that channel.  For example "#node.js" on irc.freenode.net has backups at <http://nodejs.debuggable.com/>.  Use the following to list known channels:
-
-    ircgrep -l
+    alias ircgrep='.../ircgrep/bin/ircgrep'
 
 
 ## Usage
@@ -33,6 +31,13 @@ Search the node.js logs for occurences of "require.paths":
 By default `ircgrep` search back 7 days. You can specify a particular number of days with the `-d|--days N` option:
 
     ircgrep -d 30 node.js 'require\.main'
+
+
+## Known channel logs
+
+To grep logs for a channel, ircgrep has to know about a log location for that channel.  For example "#node.js" on irc.freenode.net has backups at <http://nodejs.debuggable.com/>.  Use the following to list known channels:
+
+    ircgrep -l
 
 
 ## Why is it slow the first time?
