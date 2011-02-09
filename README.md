@@ -39,6 +39,8 @@ To grep logs for a channel, ircgrep has to know about a log location for that ch
 
     ircgrep -l
 
+Is there a channel with publicly available daily logs that you'd like me to add? Please [create an issue](https://github.com/trentm/ircgrep/issues) and lets discuss.
+
 
 ## Why is it slow the first time?
 
