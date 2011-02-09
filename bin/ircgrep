@@ -1,0 +1,339 @@
+#!/usr/bin/python
+
+"""ircgrep -- grep back through IRC logs
+
+Setup:
+
+    alias ircgrep='python .../ircgrep.py'
+
+Then try this:
+
+    # Search "node.js" irc logs for "foo".
+    $ ircgrep node.js foo
+
+    # List IRC channels with known IRC logs.
+    $ ircgrep -l
+"""
+
+__version_info__ = (1, 0, 0)
+__version__ = '.'.join(map(str, __version_info__))
+
+import os
+from os.path import join, dirname, abspath, exists
+import sys
+import getpass
+import logging
+import optparse
+from pprint import pprint, pformat
+import time
+import datetime
+import re
+import codecs
+import json
+import urllib
+
+sys.path.insert(0, join(dirname(dirname(abspath(__file__))), "externals", "lib"))
+import httplib2
+import appdirs
+import colorama
+
+
+
+#---- globals & config
+
+log = logging.getLogger("ircgrep")
+dirs = appdirs.AppDirs("ircgrep", "TrentMick")
+
+CHANNELS = {
+    "node.js": ("irc.freenode.net", "http://nodejs.debuggable.com/"),
+}
+
+
+
+#---- main functionality
+
+def ircgrep(channels, days, pattern, user=None, offline=False):
+    """Grep IRC logs (for channels with known log locations).
+    
+    @param channels {list} List of the channels to search, e.g. ["node.js"].
+        These are keys to `CHANNELS`.
+    @param days {int} The number of days back to search.
+    @param pattern {str|regex} The pattern to search for. Either a string
+        (simple substring match, faster) or a compiled regex object.
+    @param user {str|None} Can be a string to match against msg usernames
+        (case-insensitive substring match) to filter on them.
+    @param offline {boolean} If true, will disable updating the local cache
+        from the log file server. Default false.
+    """
+    # Update the local cache.
+    if not offline:
+        for channel in channels:
+            update_cache(channel, days)
+    
+    t = datetime.datetime.utcnow()
+    for i in range(days):
+        base = "%s.txt" % t.strftime("%Y-%m-%d")
+        for channel in channels:
+            json_path = join(dirs.user_cache_dir, channel, "%s.json" % base)
+            if not exists(json_path):
+                log.debug("'%s' does not exist (skipping)", json_path)
+            else:
+                f = codecs.open(json_path, 'r', 'utf-8')
+                msgs = json.load(f)
+                f.close()
+        
+                for line, timestamp, who, msg in msgs:
+                    if user and user.lower() not in who.lower():
+                        continue
+                    if isinstance(pattern, (str, unicode)):
+                        # Simple string-contains search.
+                        if pattern in msg:
+                            ranges = []
+                            start = 0
+                            while start < len(msg):
+                                try:
+                                    idx = msg.index(pattern, start)
+                                except ValueError:
+                                    break
+                                else:
+                                    ranges.append((idx, idx+len(pattern)))
+                                    start = idx+1
+                            yield Hit(channel, t.date(), line, timestamp, who, msg, pattern, ranges)
+                    else:
+                        ranges = [m.span() for m in pattern.finditer(msg)]
+                        if ranges:
+                            yield Hit(channel, t.date(), line, timestamp, who, msg, pattern, ranges)
+        
+        # Next day.
+        t -= datetime.timedelta(days=1)
+
+
+class Hit(object):
+    """A single grep hit."""
+    def __init__(self, channel, day, line, timestamp, who, msg, pattern, ranges):
+        self.channel = channel
+        self.day = day
+        self.base = day.strftime("%Y-%m-%d") + ".txt"
+        self.line = line
+        self.cache_path = join(dirs.user_cache_dir, channel, "%s#%s" % (self.base, line))
+        self.timestamp = timestamp
+        self.who = who
+        self.msg = msg
+        self.pattern = pattern  # a string (sub-string match) or regex object
+        self.ranges = ranges
+    def __repr__(self):
+        pattern_str = (pattern if isinstance(pattern, (str, unicode))
+            else pattern.pattern)
+        return "<Hit: /%s/ in <%s>: %s <%s> ...>" % (self.pattern, basename(self.cache_path),
+            self.timestamp, self.who)
+    def write(self, stream=sys.stdout):
+        if stream.isatty():
+            marked_msg = []
+            n = 0
+            for start, end in self.ranges:
+                marked_msg.append(self.msg[n:start])
+                marked_msg.append(colorama.Back.YELLOW)
+                marked_msg.append(self.msg[start:end])
+                marked_msg.append(colorama.Back.RESET)
+                n = end
+            marked_msg.append(self.msg[n:])
+            marked_msg = ''.join(marked_msg)
+            #marked_msg = self.msg.replace(self.pattern, "%s%s%s" % (
+            #    colorama.Back.YELLOW, self.pattern, colorama.Back.RESET))
+            lines = [
+                u"%s%s%s" % (colorama.Fore.YELLOW, self.cache_path,
+                    colorama.Fore.RESET),
+                u"%s%s <%s>%s %s" % (colorama.Fore.MAGENTA,
+                    self.timestamp, self.who, colorama.Fore.RESET, marked_msg),
+            ]
+        else:
+            lines = [
+                self.url,
+                u"%s <%s> %s" % (self.timestamp, self.who, self.msg),
+            ]
+        s = (u'\n'.join(lines) + u'\n').encode(stream.encoding or "UTF-8")
+        stream.write(s)
+
+
+
+_msg_pat = re.compile(r'^\[(\d\d:\d\d)\] (.*?): (.*?)$', re.M)
+def _parse_log_text(text):
+    """Parse the given IRC log text."""
+    msgs = []
+    for i, line in enumerate(text.splitlines(False)):
+        m = _msg_pat.match(line)
+        if m:
+            timestamp, who, msg = m.groups()
+            msgs.append( (i+1, timestamp, who, msg) )
+    return msgs
+
+
+_day_link_pat = re.compile(r'''
+    <tr>
+        <td\ class="n"><a\ href="(?P<href>.*?\.txt)">\1</a></td>
+        <td\ class="m">(?P<timestamp>.*?)</td>
+        <td\ class="s">(?P<size>.*?)</td>
+        <td\ class="t">text/plain</td>
+    </tr>
+    ''', re.VERBOSE)
+def update_cache(channel, days):
+    """Update local cache of daily log files for the given 'channel'."""
+    irc_server, log_url = CHANNELS[channel]
+    http = _get_http()
+    
+    # Get the list of day links (and metadata).
+    response, content = http.request(log_url)
+    if response["status"] not in ("200", "304"):
+        raise RuntimeError("error GET'ing %s: %s" % (log_url, response["status"]))
+    #print content
+    day_links = {}  # base -> timestamp
+    for hit in _day_link_pat.findall(content):
+        base, t_str, size = hit
+        d = datetime.datetime.strptime(t_str, "%Y-%b-%d %H:%M:%S")  # '2011-Jan-28 20:17:02'
+        day_links[base] = time.mktime(d.timetuple())
+    #pprint(day_links)
+    
+    now = datetime.datetime.utcnow()
+    now_timestamp = time.mktime(now.timetuple())
+    t = datetime.datetime.utcnow()
+    for i in range(days):
+        base = t.strftime("%Y-%m-%d") + ".txt"
+        if base not in day_links:
+            continue
+        local_path = join(dirs.user_cache_dir, channel, base)
+        local_timestamp_path = join(dirs.user_cache_dir, channel, base + ".timestamp")
+        local_timestamp = None
+        update = False
+        if not exists(local_timestamp_path):
+            update = True
+        else:
+            try:
+                local_timestamp = float(open(local_timestamp_path, 'r').read().strip())
+            except ValueError:
+                update = True
+            else:
+                if local_timestamp < day_links[base]:
+                    update = True
+        if i == 0 and local_timestamp and local_timestamp > now_timestamp - 10*60:
+            # Ten minute hysteresis on the latest log. It updates
+            # every few seconds on the server, but it is a pain to have
+            # to update it all the time.
+            update = False
+        if update:
+            response, content = http.request(log_url + base)
+            if response["status"] not in ("200", "304"):
+                raise RuntimeError("error GET'ing %s: %s\n--\n%s\n\n%s\n--" % (
+                    url+base, response["status"], pformat(response),
+                    content[:400]+"..."))
+            log.debug("update local cache of %s/%s", channel, base)
+            if not exists(dirname(local_path)):
+                os.makedirs(dirname(local_path))
+            open(local_path, 'w').write(content)
+            parsed = _parse_log_text(content)
+            open(local_path + ".json", 'w').write(json.dumps(parsed, indent=2))
+            open(local_timestamp_path, 'w').write(str(now_timestamp))
+        # Next day back.
+        t -= datetime.timedelta(days=1)
+
+
+
+#---- internal support stuff
+
+class _NoReflowFormatter(optparse.IndentedHelpFormatter):
+    """An optparse formatter that does NOT reflow the description."""
+    def format_description(self, description):
+        return description or ""
+
+def _get_http():
+    cache_dir = os.path.join(dirs.user_cache_dir, ".httplib2")
+    if not os.path.exists(os.path.dirname(cache_dir)):
+        os.makedirs(os.path.dirname(cache_dir))
+    return httplib2.Http(cache_dir)
+
+
+
+
+#---- mainline
+
+def main(argv=sys.argv):
+    logging.basicConfig(format='%(name)s: %(levelname)s: %(message)s')
+    log.setLevel(logging.INFO)
+    colorama.init()
+
+    # Parse options.
+    parser = optparse.OptionParser(prog="ircgrep", usage='',
+        version="%prog " + __version__, description=__doc__,
+        formatter=_NoReflowFormatter())
+    parser.add_option("-v", "--verbose", dest="log_level",
+        action="store_const", const=logging.DEBUG,
+        help="more verbose output")
+    parser.add_option("-q", "--quiet", dest="log_level",
+        action="store_const", const=logging.WARNING,
+        help="quieter output (just warnings and errors)")
+    parser.add_option("-o", "--offline", action="store_true", default=False,
+        help="offline mode (don't try to update local cache)")
+    parser.add_option("-i", "--case-insensitive", action="store_true",
+        default=False, help="case-insensitive searching")
+    parser.add_option("-d", "--days", dest="days", type="int", default=7,
+        help="the number of days back to search (default: 7 days)")
+    parser.add_option("-u", "--user",
+        help="filter by user (case-insensitive substring match, i.e. 'josh' matches 'Josh Wilsdon')")
+    #TODO: '-l' to list channels
+    parser.set_default("log_level", logging.INFO)
+    opts, args = parser.parse_args()
+    log.setLevel(opts.log_level)
+    
+    # Process args.
+    if len(args) != 2:
+        log.error("Incorrect number of args. See `ircgrep --help`.")
+        return 1
+    channels = args[0].split(',')
+    pattern = args[1]
+
+    # Do it.
+    if opts.case_insensitive or pattern != re.escape(pattern):
+        flags = 0
+        if opts.case_insensitive:
+            flags |= re.IGNORECASE
+        pattern = re.compile(pattern, flags)
+    for i, hit in enumerate(ircgrep(channels, opts.days, pattern,
+            user=opts.user, offline=opts.offline)):
+        if i != 0:
+            print
+        hit.write()
+
+
+
+## {{{ http://code.activestate.com/recipes/577258/ (r5)
+if __name__ == "__main__":
+    try:
+        retval = main(sys.argv)
+    except KeyboardInterrupt:
+        sys.exit(1)
+    except SystemExit:
+        raise
+    except:
+        import traceback, logging
+        if not log.handlers and not logging.root.handlers:
+            logging.basicConfig()
+        skip_it = False
+        exc_info = sys.exc_info()
+        if hasattr(exc_info[0], "__name__"):
+            exc_class, exc, tb = exc_info
+            if isinstance(exc, IOError) and exc.args[0] == 32:
+                # Skip 'IOError: [Errno 32] Broken pipe': often a cancelling of `less`.
+                skip_it = True
+            if not skip_it:
+                tb_path, tb_lineno, tb_func = traceback.extract_tb(tb)[-1][:3]
+                log.error("%s (%s:%s in %s)", exc_info[1], tb_path,
+                    tb_lineno, tb_func)
+        else:  # string exception
+            log.error(exc_info[0])
+        if not skip_it:
+            if log.isEnabledFor(logging.DEBUG):
+                print()
+                traceback.print_exception(*exc_info)
+            sys.exit(1)
+    else:
+        sys.exit(retval)
+## end of http://code.activestate.com/recipes/577258/ }}}

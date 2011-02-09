@@ -1,0 +1,5 @@
+- push to github
+- Makefile.py for releases
+- blog post and tweet
+- ask for other irc chat log locations (eventually should support a config
+  file for this?)
