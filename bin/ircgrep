@@ -2,17 +2,12 @@
 
 """ircgrep -- grep back through IRC logs
 
-Setup:
+Usage:
+  # Search "node.js" irc logs for "foo".
+  $ ircgrep node.js foo
 
-    alias ircgrep='python .../ircgrep.py'
-
-Then try this:
-
-    # Search "node.js" irc logs for "foo".
-    $ ircgrep node.js foo
-
-    # List IRC channels with known IRC logs.
-    $ ircgrep -l
+  # List IRC channels with known IRC logs.
+  $ ircgrep -l
 """
 
 __version_info__ = (1, 0, 0)
