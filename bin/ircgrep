@@ -265,6 +265,8 @@ def main(argv=sys.argv):
     parser.add_option("-q", "--quiet", dest="log_level",
         action="store_const", const=logging.WARNING,
         help="quieter output (just warnings and errors)")
+    parser.add_option("-l", "--list-channels", action="store_true", default=False,
+        help="list known channels")
     parser.add_option("-o", "--offline", action="store_true", default=False,
         help="offline mode (don't try to update local cache)")
     parser.add_option("-i", "--case-insensitive", action="store_true",
@@ -273,11 +275,19 @@ def main(argv=sys.argv):
         help="the number of days back to search (default: 7 days)")
     parser.add_option("-u", "--user",
         help="filter by user (case-insensitive substring match, i.e. 'josh' matches 'Josh Wilsdon')")
-    #TODO: '-l' to list channels
     parser.set_default("log_level", logging.INFO)
     opts, args = parser.parse_args()
     log.setLevel(opts.log_level)
     
+    if opts.list_channels:
+        if log.isEnabledFor(logging.INFO):
+            print "# Known IRC channels"
+            print "# <http://github.com/trentm/ircgrep/issues> to add a new channel."
+            print "#"
+        for name, info in sorted(CHANNELS.items()):
+            print "'%s' on %s (logs at %s)" % (name, info[0], info[1])
+        return
+
     # Process args.
     if len(args) != 2:
         log.error("Incorrect number of args. See `ircgrep --help`.")
