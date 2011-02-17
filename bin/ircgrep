@@ -10,7 +10,7 @@ Usage:
   $ ircgrep -l
 """
 
-__version_info__ = (1, 0, 0)
+__version_info__ = (1, 0, 1)
 __version__ = '.'.join(map(str, __version_info__))
 
 import os
@@ -117,10 +117,10 @@ class Hit(object):
         self.pattern = pattern  # a string (sub-string match) or regex object
         self.ranges = ranges
     def __repr__(self):
-        pattern_str = (pattern if isinstance(pattern, (str, unicode))
-            else pattern.pattern)
-        return "<Hit: /%s/ in <%s>: %s <%s> ...>" % (self.pattern, basename(self.cache_path),
-            self.timestamp, self.who)
+        pattern_str = (self.pattern if isinstance(self.pattern, (str, unicode))
+            else self.pattern.pattern)
+        return "<Hit: /%s/ in <%s>: %s <%s> ...>" % (pattern_str,
+            os.path.basename(self.cache_path), self.timestamp, self.who)
     def write(self, stream=sys.stdout):
         if stream.isatty():
             marked_msg = []
@@ -143,7 +143,7 @@ class Hit(object):
             ]
         else:
             lines = [
-                self.url,
+                self.cache_path,
                 u"%s <%s> %s" % (self.timestamp, self.who, self.msg),
             ]
         s = (u'\n'.join(lines) + u'\n').encode(stream.encoding or "UTF-8")
