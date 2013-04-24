@@ -116,7 +116,13 @@ class Hit(object):
         self.day = day
         self.base = day.strftime("%Y-%m-%d") + ".txt"
         self.line = line
-        self.cache_path = join(dirs.user_cache_dir, channel, "%s#%s" % (self.base, line))
+        self.cache_path = join(dirs.user_cache_dir, channel, "%s#L%s" % (self.base, line))
+        base_url = CHANNELS[self.channel][1]
+        if not base_url.endswith("/"):
+            base_url += "/"
+        anchor = "L%s" % line
+        anchor = "T%s" % timestamp
+        self.url = "%s%s#%s" % (base_url, self.base, anchor)
         self.timestamp = timestamp
         self.who = who
         self.msg = msg
@@ -142,14 +148,14 @@ class Hit(object):
             #marked_msg = self.msg.replace(self.pattern, "%s%s%s" % (
             #    colorama.Back.YELLOW, self.pattern, colorama.Back.RESET))
             lines = [
-                u"%s%s%s" % (colorama.Fore.YELLOW, self.cache_path,
+                u"%s%s%s" % (colorama.Fore.YELLOW, self.url,
                     colorama.Fore.RESET),
                 u"%s%s <%s>%s %s" % (colorama.Fore.MAGENTA,
                     self.timestamp, self.who, colorama.Fore.RESET, marked_msg),
             ]
         else:
             lines = [
-                self.cache_path,
+                self.url,
                 u"%s <%s> %s" % (self.timestamp, self.who, self.msg),
             ]
         s = (u'\n'.join(lines) + u'\n').encode(stream.encoding or "UTF-8")
