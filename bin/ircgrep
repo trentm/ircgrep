@@ -40,7 +40,13 @@ log = logging.getLogger("ircgrep")
 dirs = appdirs.AppDirs("ircgrep", "TrentMick")
 
 CHANNELS = {
-    "node.js": ("irc.freenode.net", "http://nodejs.debuggable.com/"),
+    # From issue #1:
+    # There *had* been node.js IRC logs at http://nodejs.debuggable.com
+    # but they drop off at the end of March, 2012. Also the text log format
+    # is slightly different... as is the index HTML page.
+    "node.js": ("irc.freenode.net", "http://static.izs.me/irclogs/node.js/"),
+    "libuv": ("irc.freenode.net", "http://static.izs.me/irclogs/libuv/"),
+    "npm": ("irc.freenode.net", "http://static.izs.me/irclogs/npm/"),
 }
 
 
@@ -49,7 +55,7 @@ CHANNELS = {
 
 def ircgrep(channels, days, pattern, user=None, offline=False):
     """Grep IRC logs (for channels with known log locations).
-    
+
     @param channels {list} List of the channels to search, e.g. ["node.js"].
         These are keys to `CHANNELS`.
     @param days {int} The number of days back to search.
@@ -64,7 +70,7 @@ def ircgrep(channels, days, pattern, user=None, offline=False):
     if not offline:
         for channel in channels:
             update_cache(channel, days)
-    
+
     t = datetime.datetime.utcnow()
     for i in range(days):
         base = "%s.txt" % t.strftime("%Y-%m-%d")
@@ -76,7 +82,7 @@ def ircgrep(channels, days, pattern, user=None, offline=False):
                 f = codecs.open(json_path, 'r', 'utf-8')
                 msgs = json.load(f)
                 f.close()
-        
+
                 for line, timestamp, who, msg in msgs:
                     if user and user.lower() not in who.lower():
                         continue
@@ -98,7 +104,7 @@ def ircgrep(channels, days, pattern, user=None, offline=False):
                         ranges = [m.span() for m in pattern.finditer(msg)]
                         if ranges:
                             yield Hit(channel, t.date(), line, timestamp, who, msg, pattern, ranges)
-        
+
         # Next day.
         t -= datetime.timedelta(days=1)
 
@@ -151,7 +157,8 @@ class Hit(object):
 
 
 
-_msg_pat = re.compile(r'^\[(\d\d:\d\d)\] (.*?): (.*?)$', re.M)
+# TODO: This format should be in CHANNELS.
+_msg_pat = re.compile(r'^(\d\d:\d\d) <[ @](.*?)> (.*?)$', re.M)
 def _parse_log_text(text):
     """Parse the given IRC log text."""
     msgs = []
@@ -163,31 +170,29 @@ def _parse_log_text(text):
     return msgs
 
 
+#TODO: _day_link_pat should be part of CHANNELS
 _day_link_pat = re.compile(r'''
-    <tr>
-        <td\ class="n"><a\ href="(?P<href>.*?\.txt)">\1</a></td>
-        <td\ class="m">(?P<timestamp>.*?)</td>
-        <td\ class="s">(?P<size>.*?)</td>
-        <td\ class="t">text/plain</td>
-    </tr>
-    ''', re.VERBOSE)
+    ^<a\ href="(?P<href>.*?\.txt)">\1</a>\s+(?P<timestamp>.*?)\s+(?P<size>\d+?)$
+    ''', re.VERBOSE | re.M)
 def update_cache(channel, days):
     """Update local cache of daily log files for the given 'channel'."""
     irc_server, log_url = CHANNELS[channel]
     http = _get_http()
-    
+
     # Get the list of day links (and metadata).
     response, content = http.request(log_url)
     if response["status"] not in ("200", "304"):
         raise RuntimeError("error GET'ing %s: %s" % (log_url, response["status"]))
+    content = content.replace('\r\n', '\n');
     #print content
     day_links = {}  # base -> timestamp
     for hit in _day_link_pat.findall(content):
         base, t_str, size = hit
-        d = datetime.datetime.strptime(t_str, "%Y-%b-%d %H:%M:%S")  # '2011-Jan-28 20:17:02'
+        # TODO: datetime format should be part of CHANNELS
+        d = datetime.datetime.strptime(t_str, "%d-%b-%Y %H:%M")  # '17-Jun-2012 00:00'
         day_links[base] = time.mktime(d.timetuple())
     #pprint(day_links)
-    
+
     now = datetime.datetime.utcnow()
     now_timestamp = time.mktime(now.timetuple())
     t = datetime.datetime.utcnow()
@@ -278,7 +283,7 @@ def main(argv=sys.argv):
     parser.set_default("log_level", logging.INFO)
     opts, args = parser.parse_args()
     log.setLevel(opts.log_level)
-    
+
     if opts.list_channels:
         if log.isEnabledFor(logging.INFO):
             print "# Known IRC channels"
